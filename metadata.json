@@ -1,0 +1,6 @@
+{
+  "name": "TopoVlucht",
+  "description": "Leer topografie vliegend per helikopter, vliegtuig en raket over open kaarten van Nederland, Europa en de wereld.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

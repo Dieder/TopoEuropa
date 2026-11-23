@@ -1,0 +1,92 @@
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+@layer base {
+  :root {
+    --font-display: 'Outfit', system-ui, sans-serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  }
+
+  body {
+    font-family: var(--font-sans);
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-display);
+  }
+
+  .font-mono-tabular {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@keyframes rotor-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes rocket-flame {
+  0%, 100% {
+    transform: scaleY(1) scaleX(1);
+    opacity: 0.92;
+  }
+  50% {
+    transform: scaleY(1.28) scaleX(0.88);
+    opacity: 1;
+  }
+}
+
+@keyframes beacon-ring {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.85;
+  }
+  70% {
+    transform: scale(1.65);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.65);
+    opacity: 0;
+  }
+}
+
+.animate-rotor {
+  transform-origin: 50% 48%;
+  animation: rotor-spin 0.14s linear infinite;
+}
+
+.animate-rocket-flame {
+  transform-origin: 50% 0%;
+  animation: rocket-flame 0.16s ease-in-out infinite;
+}
+
+.animate-beacon-ring {
+  animation: beacon-ring 1.3s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+/* Clean Leaflet overrides for game map */
+.leaflet-container {
+  font-family: var(--font-sans);
+  background: #dbeafe;
+  outline: none;
+}
+
+.leaflet-div-icon {
+  background: transparent !important;
+  border: none !important;
+}
+
+.leaflet-control-attribution {
+  font-size: 10px !important;
+  background: rgba(255, 255, 255, 0.78) !important;
+  backdrop-filter: blur(4px);
+  color: #475569 !important;
+}
+
