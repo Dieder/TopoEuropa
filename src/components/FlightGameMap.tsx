@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { AnswerLog, GeoPlace, LevelConfig, MapStyle } from '../types/game';
 import { soundEngine } from '../audio/soundEngine';
-import { distanceToPlaceKm, formatTime, lerpAngleDeg, shuffleArray } from '../utils/geo';
+import { distanceToPlaceKm, formatTime, haversineKm, lerpAngleDeg, shuffleArray } from '../utils/geo';
 import { buildAircraftMarkerHtml, AircraftIcon } from './AircraftSprite';
 import { Minimap } from './Minimap';
 import { getVehicleLabel } from '../data/levels';
@@ -32,6 +32,7 @@ interface FlightGameMapProps {
   initialMuted: boolean;
   onToggleMute: () => void;
   onExitToMenu: () => void;
+  onPlaceFound?: (placeId: string) => void;
   onCompleteLevel: (result: {
     flightTimeSec: number;
     penalties: number;
@@ -62,6 +63,7 @@ export const FlightGameMap: React.FC<FlightGameMapProps> = ({
   initialMuted,
   onToggleMute,
   onExitToMenu,
+  onPlaceFound,
   onCompleteLevel,
 }) => {
   // Shuffled target queue of exact targetCount
@@ -88,6 +90,9 @@ export const FlightGameMap: React.FC<FlightGameMapProps> = ({
   const mapRef = useRef<L.Map | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const aircraftMarkerRef = useRef<L.Marker | null>(null);
+  const flightPathLayerRef = useRef<L.Polyline | null>(null);
+  const flightTrailPointsRef = useRef<[number, number][]>([[...level.center]]);
+  const lastTrailDrawPosRef = useRef<[number, number]>([...level.center]);
   const placeLayersRef = useRef<
     Map<
       string,
@@ -265,6 +270,7 @@ export const FlightGameMap: React.FC<FlightGameMapProps> = ({
         nextFound.add(chosenPlace.id);
         foundIdsRef.current = nextFound;
         setFoundIds(nextFound);
+        onPlaceFound?.(chosenPlace.id);
 
         const elapsedNowSec = Math.floor(flightTimeMsRef.current / 1000);
         logsRef.current.push({
@@ -310,7 +316,7 @@ export const FlightGameMap: React.FC<FlightGameMapProps> = ({
         showToast('penalty', `Verkeerde plek: dat is ${chosenPlace.name} (+1 min straf)`);
       }
     },
-    [onCompleteLevel, showToast, syncPlaceVisuals, targets]
+    [onCompleteLevel, onPlaceFound, showToast, syncPlaceVisuals, targets]
   );
 
   // Keep latest handleSelectPlace in ref for Leaflet click handlers
@@ -415,6 +421,20 @@ export const FlightGameMap: React.FC<FlightGameMapProps> = ({
     }
     placeLayersRef.current = layersMap;
 
+    // Add subtle dashed flight trail behind the aircraft
+    flightTrailPointsRef.current = [[...level.center]];
+    lastTrailDrawPosRef.current = [...level.center];
+    const flightTrail = L.polyline(flightTrailPointsRef.current, {
+      color: level.vehicle === 'rocket' ? '#EA580C' : '#0284C7',
+      weight: 2.5,
+      opacity: 0.5,
+      dashArray: '5 8',
+      lineCap: 'round',
+      lineJoin: 'round',
+      interactive: false,
+    }).addTo(map);
+    flightPathLayerRef.current = flightTrail;
+
     // Add Aircraft Marker on top
     const aircraftIcon = L.divIcon({
       className: 'topo-aircraft-icon',
@@ -440,6 +460,7 @@ export const FlightGameMap: React.FC<FlightGameMapProps> = ({
       map.remove();
       mapRef.current = null;
       aircraftMarkerRef.current = null;
+      flightPathLayerRef.current = null;
       placeLayersRef.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -655,6 +676,41 @@ export const FlightGameMap: React.FC<FlightGameMapProps> = ({
           const rotator = el?.querySelector('.aircraft-rotator') as HTMLElement | null;
           if (rotator) {
             rotator.style.transform = `rotate(${headingRef.current.toFixed(1)}deg)`;
+          }
+        }
+
+        // Update subtle dashed flight trail (vliegpad) behind the craft
+        if (currentSpeedKmPerSec > 0 && flightPathLayerRef.current) {
+          const [aLatTrail, aLngTrail] = aircraftPosRef.current;
+          const trailPts = flightTrailPointsRef.current;
+          const lastCommitted = trailPts[trailPts.length - 1];
+          const commitStepKm = Math.max(2, level.defaultProximityKm * 0.14);
+
+          const distFromLastDrawKm = haversineKm(
+            aLatTrail,
+            aLngTrail,
+            lastTrailDrawPosRef.current[0],
+            lastTrailDrawPosRef.current[1]
+          );
+
+          if (distFromLastDrawKm >= commitStepKm * 0.35) {
+            const distFromCommittedKm = haversineKm(
+              aLatTrail,
+              aLngTrail,
+              lastCommitted[0],
+              lastCommitted[1]
+            );
+
+            if (distFromCommittedKm >= commitStepKm) {
+              trailPts.push([aLatTrail, aLngTrail]);
+              if (trailPts.length > 360) {
+                trailPts.shift();
+              }
+              flightPathLayerRef.current.setLatLngs(trailPts);
+            } else {
+              flightPathLayerRef.current.setLatLngs([...trailPts, [aLatTrail, aLngTrail]]);
+            }
+            lastTrailDrawPosRef.current = [aLatTrail, aLngTrail];
           }
         }
 

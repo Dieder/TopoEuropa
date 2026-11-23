@@ -71,3 +71,40 @@ export interface AnswerLog {
 export type GameScreen = 'MENU' | 'PLAYING' | 'SUMMARY';
 
 export type MapStyle = 'osm' | 'relief';
+
+export interface PlayerStats {
+  visitedPlaceIds: string[];
+  totalLandings: number;
+}
+
+export type AchievementId =
+  | 'first_flight'
+  | 'nl_master'
+  | 'rocket_launch'
+  | 'explorer_100'
+  | 'flawless_level'
+  | 'flawless_all'
+  | 'stars_15'
+  | 'all_gold';
+
+export interface Achievement {
+  id: AchievementId;
+  title: string;
+  description: string;
+  unlocked: boolean;
+  progressCurrent: number;
+  progressTarget: number;
+}
+
+export interface LeaderboardEntry {
+  id: string;
+  pilotName: string;
+  /** Lowest total time (flight + penalty) per level id */
+  levelBestTimes: Record<number, number>;
+  /** Lowest penalties per level id */
+  levelBestPenalties: Record<number, number>;
+  totalStars: number;
+  completedLevels: number;
+  totalTimeSec: number;
+  updatedAt: string;
+}

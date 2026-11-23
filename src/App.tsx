@@ -1,25 +1,52 @@
 import { useMemo, useState } from 'react';
 import {
+  Award,
+  CheckCircle2,
   Compass,
   Lock,
+  MapPin,
+  Medal,
   Play,
+  Rocket,
   RotateCcw,
+  ShieldCheck,
   Star,
+  Target,
+  Trophy,
   Unlock,
+  UserPlus,
   Volume2,
   VolumeX,
 } from 'lucide-react';
 import { ALL_LEVELS, getLevelById, getVehicleLabel } from './data/levels';
-import { AnswerLog, GameScreen, LevelConfig, ProgressMap } from './types/game';
 import {
+  AchievementId,
+  AnswerLog,
+  GameScreen,
+  LeaderboardEntry,
+  LevelConfig,
+  PlayerStats,
+  ProgressMap,
+} from './types/game';
+import {
+  ActivePilotProfile,
   calculateStars,
+  computeAchievements,
   getRankForStars,
   getTotalStars,
   isLevelUnlocked,
+  loadActivePilot,
+  loadLeaderboard,
   loadProgress,
+  loadStats,
   loadUnlockAll,
+  saveActivePilot,
+  saveLeaderboard,
   saveProgress,
+  saveStats,
   saveUnlockAll,
+  sortLeaderboard,
+  upsertPilotLeaderboard,
 } from './utils/progression';
 import { formatTime } from './utils/geo';
 import { soundEngine } from './audio/soundEngine';
@@ -42,6 +69,21 @@ export default function App() {
   const [activeLevelId, setActiveLevelId] = useState<number>(1);
   const [runKey, setRunKey] = useState<number>(0);
   const [progress, setProgress] = useState<ProgressMap>(() => loadProgress());
+  const [stats, setStats] = useState<PlayerStats>(() => loadStats());
+  const [activePilot, setActivePilot] = useState<ActivePilotProfile>(() => loadActivePilot());
+  const [pilotNameInput, setPilotNameInput] = useState<string>(() => loadActivePilot().name);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>(() => {
+    const initialProgress = loadProgress();
+    const initialPilot = loadActivePilot();
+    const existing = loadLeaderboard();
+    const synced = upsertPilotLeaderboard(existing, initialPilot, initialProgress);
+    if (synced.length !== existing.length) {
+      saveLeaderboard(synced);
+    }
+    return synced;
+  });
+  const [leaderboardFilter, setLeaderboardFilter] = useState<'all' | 'complete'>('all');
+  const [confirmClearBoard, setConfirmClearBoard] = useState<boolean>(false);
   const [unlockAll, setUnlockAll] = useState<boolean>(() => loadUnlockAll());
   const [muted, setMuted] = useState<boolean>(false);
   const [summary, setSummary] = useState<SummaryState | null>(null);
@@ -50,6 +92,22 @@ export default function App() {
   const totalStars = useMemo(() => getTotalStars(progress), [progress]);
   const maxStars = ALL_LEVELS.length * 3;
   const pilotRank = useMemo(() => getRankForStars(totalStars), [totalStars]);
+  const achievements = useMemo(
+    () => computeAchievements(progress, stats),
+    [progress, stats]
+  );
+  const unlockedAchievementCount = useMemo(
+    () => achievements.filter((a) => a.unlocked).length,
+    [achievements]
+  );
+
+  const filteredLeaderboard = useMemo(() => {
+    const sorted = sortLeaderboard(leaderboard);
+    if (leaderboardFilter === 'complete') {
+      return sorted.filter((entry) => entry.completedLevels === ALL_LEVELS.length);
+    }
+    return sorted;
+  }, [leaderboard, leaderboardFilter]);
 
   // Next recommended playable level
   const recommendedLevel = useMemo(() => {
@@ -115,6 +173,9 @@ export default function App() {
 
     setProgress(updated);
     saveProgress(updated);
+    const nextLeaderboard = upsertPilotLeaderboard(leaderboard, activePilot, updated);
+    setLeaderboard(nextLeaderboard);
+    saveLeaderboard(nextLeaderboard);
     setSummary({
       level,
       flightTimeSec: result.flightTimeSec,
@@ -127,6 +188,62 @@ export default function App() {
     setScreen('SUMMARY');
   };
 
+  const handleSavePilotName = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = pilotNameInput.trim();
+    if (!trimmed) return;
+    const updatedPilot: ActivePilotProfile = { ...activePilot, name: trimmed };
+    setActivePilot(updatedPilot);
+    saveActivePilot(updatedPilot);
+
+    const updatedBoard = leaderboard.map((entry) =>
+      entry.id === updatedPilot.id ? { ...entry, pilotName: trimmed } : entry
+    );
+    setLeaderboard(updatedBoard);
+    saveLeaderboard(updatedBoard);
+  };
+
+  const handleNewPilotSession = () => {
+    const nextNum = leaderboard.length + 1;
+    const suggestedName = `Piloot ${nextNum}`;
+    const newPilot: ActivePilotProfile = {
+      id: `pilot-${Date.now()}`,
+      name: suggestedName,
+    };
+    setActivePilot(newPilot);
+    setPilotNameInput(suggestedName);
+    saveActivePilot(newPilot);
+
+    setProgress({});
+    saveProgress({});
+    const emptyStats: PlayerStats = { visitedPlaceIds: [], totalLandings: 0 };
+    setStats(emptyStats);
+    saveStats(emptyStats);
+    setConfirmReset(false);
+  };
+
+  const handleClearLeaderboard = () => {
+    if (!confirmClearBoard) {
+      setConfirmClearBoard(true);
+      return;
+    }
+    setLeaderboard([]);
+    saveLeaderboard([]);
+    setConfirmClearBoard(false);
+  };
+
+  const handlePlaceFound = (placeId: string) => {
+    setStats((prev) => {
+      const hasVisited = prev.visitedPlaceIds.includes(placeId);
+      const next: PlayerStats = {
+        visitedPlaceIds: hasVisited ? prev.visitedPlaceIds : [...prev.visitedPlaceIds, placeId],
+        totalLandings: prev.totalLandings + 1,
+      };
+      saveStats(next);
+      return next;
+    });
+  };
+
   const handleResetProgress = () => {
     if (!confirmReset) {
       setConfirmReset(true);
@@ -134,6 +251,9 @@ export default function App() {
     }
     setProgress({});
     saveProgress({});
+    const emptyStats: PlayerStats = { visitedPlaceIds: [], totalLandings: 0 };
+    setStats(emptyStats);
+    saveStats(emptyStats);
     setConfirmReset(false);
   };
 
@@ -149,6 +269,7 @@ export default function App() {
           soundEngine.stopEngine();
           setScreen('MENU');
         }}
+        onPlaceFound={handlePlaceFound}
         onCompleteLevel={handleCompleteLevel}
       />
     );
@@ -193,10 +314,16 @@ export default function App() {
               Missiekaart
             </a>
             <a
-              href="#rangen"
+              href="#prestaties"
               className="hover:text-slate-900 transition-colors whitespace-nowrap shrink-0"
             >
-              Rangen & Sterren
+              Prestaties
+            </a>
+            <a
+              href="#klassement"
+              className="hover:text-slate-900 transition-colors whitespace-nowrap shrink-0"
+            >
+              Beste Piloten
             </a>
             <a
               href="#besturing"
@@ -325,7 +452,7 @@ export default function App() {
                 </span>
               </button>
 
-              {totalStars > 0 && (
+              {(totalStars > 0 || stats.visitedPlaceIds.length > 0) && (
                 <button
                   type="button"
                   onClick={handleResetProgress}
@@ -431,6 +558,265 @@ export default function App() {
               );
             })}
           </div>
+        </section>
+
+        {/* Prestaties (Badges & Milestones) */}
+        <section id="prestaties" className="space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-2">
+            <div>
+              <h2 className="text-2xl font-bold text-slate-900 font-display">Prestaties</h2>
+              <p className="text-sm text-slate-600 mt-0.5">
+                Verdien badges door mijlpalen te behalen tijdens je vluchten.
+              </p>
+            </div>
+            <div className="text-xs text-slate-600 font-mono-tabular">
+              {unlockedAchievementCount} / {achievements.length} badges behaald ·{' '}
+              {stats.visitedPlaceIds.length} unieke locaties bezocht
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {achievements.map((badge) => {
+              const pct = Math.round(
+                (badge.progressCurrent / Math.max(1, badge.progressTarget)) * 100
+              );
+
+              const renderBadgeIcon = (id: AchievementId) => {
+                const iconClass = `w-5 h-5 ${
+                  badge.unlocked ? 'text-amber-600' : 'text-slate-400'
+                }`;
+                switch (id) {
+                  case 'first_flight':
+                    return <Compass className={iconClass} />;
+                  case 'explorer_100':
+                    return <MapPin className={iconClass} />;
+                  case 'flawless_level':
+                    return <Target className={iconClass} />;
+                  case 'flawless_all':
+                    return <ShieldCheck className={iconClass} />;
+                  case 'nl_master':
+                    return <Award className={iconClass} />;
+                  case 'rocket_launch':
+                    return <Rocket className={iconClass} />;
+                  case 'stars_15':
+                    return <Star className={iconClass} />;
+                  case 'all_gold':
+                    return <Trophy className={iconClass} />;
+                }
+              };
+
+              return (
+                <article
+                  key={badge.id}
+                  className={`rounded-2xl border p-5 flex flex-col justify-between transition-colors ${
+                    badge.unlocked
+                      ? 'bg-white border-amber-300 shadow-xs'
+                      : 'bg-white/75 border-slate-200'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-start justify-between gap-3">
+                      <div
+                        className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${
+                          badge.unlocked
+                            ? 'bg-amber-50 border-amber-200'
+                            : 'bg-slate-50 border-slate-200'
+                        }`}
+                      >
+                        {renderBadgeIcon(badge.id)}
+                      </div>
+
+                      {badge.unlocked ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 whitespace-nowrap">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          Behaald
+                        </span>
+                      ) : (
+                        <span className="text-xs font-mono-tabular text-slate-400 whitespace-nowrap">
+                          {badge.progressCurrent}/{badge.progressTarget}
+                        </span>
+                      )}
+                    </div>
+
+                    <h3
+                      className={`text-base font-bold mt-3.5 font-display ${
+                        badge.unlocked ? 'text-slate-900' : 'text-slate-700'
+                      }`}
+                    >
+                      {badge.title}
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                      {badge.description}
+                    </p>
+                  </div>
+
+                  <div className="mt-4 pt-3 border-t border-slate-100">
+                    <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full transition-transform duration-300 origin-left ${
+                          badge.unlocked ? 'bg-amber-500' : 'bg-sky-600/70'
+                        }`}
+                        style={{ transform: `scaleX(${Math.max(0.02, pct / 100)})` }}
+                      />
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Beste Piloten (Leaderboard in localStorage) */}
+        <section id="klassement" className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 space-y-6">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2.5">
+                <Medal className="w-5 h-5 text-amber-500" />
+                <h2 className="text-2xl font-bold text-slate-900 font-display">Beste Piloten</h2>
+              </div>
+              <p className="text-sm text-slate-600 mt-1">
+                Klassement op basis van de laagste totale tijd over alle voltooide levels
+                (opgeslagen in deze browser).
+              </p>
+            </div>
+
+            <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg self-start lg:self-auto">
+              <button
+                type="button"
+                onClick={() => setLeaderboardFilter('all')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap ${
+                  leaderboardFilter === 'all'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Alle piloten
+              </button>
+              <button
+                type="button"
+                onClick={() => setLeaderboardFilter('complete')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap ${
+                  leaderboardFilter === 'complete'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Alle 9 levels voltooid
+              </button>
+            </div>
+          </div>
+
+          {/* Active Pilot Name & Switch Player Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50 border border-slate-200 rounded-xl p-4">
+            <form onSubmit={handleSavePilotName} className="flex flex-wrap items-center gap-2.5">
+              <label htmlFor="pilot-name-input" className="text-xs font-semibold text-slate-700">
+                Jouw pilootnaam:
+              </label>
+              <input
+                id="pilot-name-input"
+                type="text"
+                maxLength={24}
+                value={pilotNameInput}
+                onChange={(e) => setPilotNameInput(e.target.value)}
+                placeholder="Bijv. Emma"
+                className="px-3 py-1.5 text-sm bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500"
+              />
+              <button
+                type="submit"
+                className="px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer whitespace-nowrap"
+              >
+                Naam opslaan
+              </button>
+            </form>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleNewPilotSession}
+                className="px-3.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                title="Start een nieuwe speler op dit apparaat zonder eerdere records te wissen"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                Nieuwe speler
+              </button>
+
+              {leaderboard.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleClearLeaderboard}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  {confirmClearBoard ? 'Bevestig wissen' : 'Klassement wissen'}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {filteredLeaderboard.length === 0 ? (
+            <div className="text-center py-8 border border-dashed border-slate-200 rounded-xl text-sm text-slate-500">
+              {leaderboardFilter === 'complete'
+                ? 'Nog niemand heeft alle 9 levels voltooid. Vlieg alle missies voor een plek in dit overzicht.'
+                : 'Nog geen voltooide vluchten opgeslagen. Speel een level om op het klassement te komen.'}
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-xs text-slate-500">
+                    <th className="py-2.5 pr-4 font-semibold">#</th>
+                    <th className="py-2.5 pr-4 font-semibold">Piloot</th>
+                    <th className="py-2.5 pr-4 font-semibold">Voltooide levels</th>
+                    <th className="py-2.5 pr-4 font-semibold">Sterren</th>
+                    <th className="py-2.5 pr-4 font-semibold">Strafpunten</th>
+                    <th className="py-2.5 text-right font-semibold">Totale tijd</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredLeaderboard.map((entry, idx) => {
+                    const isCurrent = entry.id === activePilot.id;
+                    const totalPenalties = Object.values(entry.levelBestPenalties).reduce(
+                      (sum, p) => sum + p,
+                      0
+                    );
+                    return (
+                      <tr
+                        key={entry.id}
+                        className={isCurrent ? 'bg-sky-50/60' : 'hover:bg-slate-50/70'}
+                      >
+                        <td className="py-3 pr-4 font-mono-tabular font-bold text-slate-700">
+                          {idx === 0 ? (
+                            <span className="inline-flex items-center gap-1 text-amber-600">
+                              <Trophy className="w-4 h-4" />1
+                            </span>
+                          ) : (
+                            idx + 1
+                          )}
+                        </td>
+                        <td className="py-3 pr-4 font-semibold text-slate-900">
+                          {entry.pilotName}
+                          {isCurrent && (
+                            <span className="text-xs font-medium text-sky-700 ml-2">· Actief</span>
+                          )}
+                        </td>
+                        <td className="py-3 pr-4 font-mono-tabular text-slate-700">
+                          {entry.completedLevels} / {ALL_LEVELS.length}
+                        </td>
+                        <td className="py-3 pr-4 font-mono-tabular text-slate-700">
+                          {entry.totalStars} / {maxStars}
+                        </td>
+                        <td className="py-3 pr-4 font-mono-tabular text-slate-600">
+                          {totalPenalties}
+                        </td>
+                        <td className="py-3 text-right font-mono-tabular font-bold text-slate-900">
+                          {formatTime(entry.totalTimeSec)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
 
         {/* Flight Rules & Controls Guide */}
